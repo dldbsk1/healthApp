@@ -1,0 +1,17 @@
+# =========================
+# Python / cache
+# =========================
+__pycache__/
+*.py[cod]
+
+# Virtual env
+.venv/
+venv/
+
+# VSCode / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+weights/
+
