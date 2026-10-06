@@ -16,8 +16,17 @@ import java.util.UUID;
 
 /**
  * 로컬 디스크에 파일을 저장하고, WebConfig에서 /files/** 로 정적 서빙한다.
+<<<<<<< HEAD
  * application.yml의 file.storage.local.* 설정을 사용.
  * spring.profiles.active=local 일 때만 활성화된다.
+=======
+ *
+ * ⚠️ base-url(호스트 주소)은 여기서 붙이지 않고 "/files/photos/xxx.jpg" 같은
+ *    상대경로만 반환한다. 이유: 서버가 localhost로 저장한 절대 URL을 DB에 박아버리면,
+ *    다른 기기(다른 유저)가 그 사진을 볼 때 "자기 자신의 localhost"를 찾게 되어 깨진다.
+ *    실제 접속 가능한 주소(ngrok 주소 등)를 붙이는 건 클라이언트(Swift)가
+ *    지금 자기가 쓰고 있는 서버 주소(AppConfig.springBootBaseURL) 기준으로 그때그때 하면 된다.
+>>>>>>> 525ff0a (backend)
  */
 @Slf4j
 @Service
@@ -27,9 +36,12 @@ public class LocalFileStorageService implements FileStorageService {
     @Value("${file.storage.local.base-dir}")
     private String baseDir;
 
+<<<<<<< HEAD
     @Value("${file.storage.local.base-url}")
     private String baseUrl;
 
+=======
+>>>>>>> 525ff0a (backend)
     @Override
     public String upload(MultipartFile file, String directory) {
         validate(file);
@@ -47,9 +59,16 @@ public class LocalFileStorageService implements FileStorageService {
             throw new UncheckedIOException("파일 저장에 실패했습니다.", e);
         }
 
+<<<<<<< HEAD
         String url = baseUrl + "/" + directory + "/" + filename;
         log.info("[LocalFileStorage] 저장 완료: {}", url);
         return url;
+=======
+        // 호스트 주소 없이 경로만 반환 (예: "/files/photos/abc123.jpg")
+        String relativePath = "/files/" + directory + "/" + filename;
+        log.info("[LocalFileStorage] 저장 완료: {}", relativePath);
+        return relativePath;
+>>>>>>> 525ff0a (backend)
     }
 
     private void validate(MultipartFile file) {
@@ -68,4 +87,8 @@ public class LocalFileStorageService implements FileStorageService {
         }
         return originalFilename.substring(originalFilename.lastIndexOf('.'));
     }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 525ff0a (backend)

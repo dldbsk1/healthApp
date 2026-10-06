@@ -27,8 +27,17 @@ import java.util.Optional;
 @Transactional(readOnly = true)
 public class PhotoService {
 
+<<<<<<< HEAD
     /** 이 시각이 지나야 받은 사진이 공개된다 */
     private static final LocalTime REVEAL_TIME = LocalTime.of(21, 0);
+=======
+    @org.springframework.beans.factory.annotation.Value("${photo.reveal-time:21:00}")
+    private String revealTimeValue;
+
+    private LocalTime revealTime() {
+        return LocalTime.parse(revealTimeValue);
+    }
+>>>>>>> 525ff0a (backend)
 
     private final PhotoLogRepository photoLogRepository;
     private final PhotoShareRepository photoShareRepository;
@@ -81,6 +90,7 @@ public class PhotoService {
 
     // ───────────────────────── 오늘 받은 사진 (밤 9시 잠금) ─────────────────────────
 
+<<<<<<< HEAD
     public ReceivedPhotoResponse getTodayReceived(Long userId) {
         Optional<PhotoShare> shareOpt =
                 photoShareRepository.findByReceiverIdAndSharedDate(userId, LocalDate.now());
@@ -94,6 +104,22 @@ public class PhotoService {
         }
 
         PhotoShare share = shareOpt.get();
+=======
+
+    public ReceivedPhotoResponse getTodayReceived(Long userId) {
+        List<PhotoShare> shares =
+                photoShareRepository.findByReceiverIdAndSharedDateOrderByCreatedAtDesc(userId, LocalDate.now());
+
+        if (shares.isEmpty()) {
+            return ReceivedPhotoResponse.lockedResponse();
+        }
+
+        if (LocalTime.now().isBefore(revealTime())) {
+            return ReceivedPhotoResponse.lockedResponse();
+        }
+
+        PhotoShare share = shares.get(0);  // 가장 최근에 받은 것 1개만 보여줌
+>>>>>>> 525ff0a (backend)
         List<ReactionResponse> reactions = photoReactionRepository.findByPhotoShareId(share.getId())
                 .stream().map(ReactionResponse::from).toList();
 
@@ -106,6 +132,10 @@ public class PhotoService {
         );
     }
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 525ff0a (backend)
     // ───────────────────────── 리액션 ─────────────────────────
 
     @Transactional
@@ -113,7 +143,11 @@ public class PhotoService {
         PhotoShare share = photoShareRepository.findByIdAndReceiverId(shareId, userId)
                 .orElseThrow(() -> new EntityNotFoundException("전송받은 사진을 찾을 수 없습니다. id=" + shareId));
 
+<<<<<<< HEAD
         if (LocalTime.now().isBefore(REVEAL_TIME)) {
+=======
+        if (LocalTime.now().isBefore(revealTime())) {
+>>>>>>> 525ff0a (backend)
             throw new IllegalStateException("아직 공개되지 않은 사진입니다.");
         }
 
