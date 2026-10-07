@@ -21,6 +21,7 @@ import logging
 
 import cv2
 import numpy as np
+import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from analyzer import (
@@ -42,6 +43,12 @@ app = FastAPI(title="Pose Analysis Server")
 
 # LSTM은 이 버전에서 안 쓰지만, YOLO 모델 로딩은 그대로 load_models()를 재사용
 pose_model, _lstm_model_unused, _device_unused, _ = load_models()
+
+# ⭐ GPU가 없는 환경(로컬 CPU 등)에서도 돌아가도록 자동 감지.
+#    device=0으로 고정하면 CUDA가 없는 머신에서 predict() 호출 자체가 예외를 던지고,
+#    그 예외가 while 루프를 감싼 try/except에 잡혀 세션이 바로 끊긴다 — "스켈레톤이 안 보임"의 원인.
+YOLO_DEVICE = 0 if torch.cuda.is_available() else "cpu"
+logger.info("YOLO 추론 디바이스: %s", YOLO_DEVICE)
 
 VALID_EXERCISES = set(EXERCISE_RULES.keys())   # {"레그레이즈", "런지", "플랭크", "푸쉬업"}
 MISS_TOLERANCE_FRAMES = 5
@@ -88,39 +95,47 @@ async def exercise_live(ws: WebSocket):
             if data is None:
                 continue
 
-            frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-            if frame is None:
+            # ⭐ 프레임 단위로 try/except를 둬서, 한 프레임 처리 중 에러가 나도
+            #    세션(웹소켓 연결) 전체가 끊기지 않고 다음 프레임부터 계속 이어가도록 함.
+            try:
+                frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+                if frame is None:
+                    continue
+
+                h, w = frame.shape[:2]
+
+                result = pose_model.predict(frame, conf=DET_CONF, imgsz=IMGSZ, verbose=False, device=YOLO_DEVICE)[0]
+                xy, conf = _pick_main(result)
+
+                if xy is None:
+                    session.mark_person_missed()
+                    await ws.send_json({"status": "no_person"})
+                    continue
+
+                session.mark_person_seen()
+
+                masked = _mask_low_conf(xy, conf, KP_CONF).astype(np.float32)
+                norm = _normalize(masked, w, h)
+                session.frame_count += 1
+
+                # 운동 종류를 이미 알고 있으므로 첫 프레임부터 바로 채점
+                results, phase = evaluate_pose(exercise_name, norm, only_active=False)
+                score = calc_score(results)
+                session.record_frame(results, phase, score)
+                keypoints_out = norm.tolist()
+
+                await ws.send_json({
+                    "status": "analyzing",
+                    "exercise": exercise_name,
+                    "phase": phase,
+                    "phase_label": PHASE_LABEL.get(phase, phase),
+                    "score": score,
+                    "results": results,
+                    "keypoints": keypoints_out,
+                })
+            except Exception:
+                logger.exception("프레임 처리 중 오류 — 이 프레임만 건너뜀")
                 continue
-
-            h, w = frame.shape[:2]
-
-            result = pose_model.predict(frame, conf=DET_CONF, imgsz=IMGSZ, verbose=False, device=0)[0]
-            xy, conf = _pick_main(result)
-
-            if xy is None:
-                session.mark_person_missed()
-                await ws.send_json({"status": "no_person"})
-                continue
-
-            session.mark_person_seen()
-
-            masked = _mask_low_conf(xy, conf, KP_CONF).astype(np.float32)
-            norm = _normalize(masked, w, h)
-            session.frame_count += 1
-
-            # 운동 종류를 이미 알고 있으므로 첫 프레임부터 바로 채점
-            results, phase = evaluate_pose(exercise_name, norm, only_active=False)
-            score = calc_score(results)
-            session.record_frame(results, phase, score)
-
-            await ws.send_json({
-                "status": "analyzing",
-                "exercise": exercise_name,
-                "phase": phase,
-                "phase_label": PHASE_LABEL.get(phase, phase),
-                "score": score,
-                "results": results,
-            })
 
     except WebSocketDisconnect:
         logger.info("클라이언트 연결 끊김 (요약 없이 종료)")
