@@ -11,10 +11,6 @@ import org.hibernate.annotations.CreationTimestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-/**
- * 업로드된 PhotoLog 하나가 랜덤으로 어떤 유저(receiver)에게 전송됐는지 기록.
- * "밤 9시 공개" 잠금 로직은 저장 시각이 아니라 조회 시점에 LocalTime 비교로 처리한다 (서비스 계층 참고).
- */
 @Entity
 @Table(name = "photo_shares")
 @Getter
@@ -37,6 +33,10 @@ public class PhotoShare {
     @Column(name = "shared_date", nullable = false)
     private LocalDate sharedDate;
 
+    /** receiver가 '열기'를 눌렀는지. 컬럼 추가 전 기존 데이터(null)는 false로 취급하려고 Boolean(래퍼)을 씀 */
+    @Column(name = "opened")
+    private Boolean opened = false;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -46,5 +46,13 @@ public class PhotoShare {
         this.photoLog = photoLog;
         this.receiver = receiver;
         this.sharedDate = sharedDate;
+    }
+
+    public boolean isOpened() {
+        return Boolean.TRUE.equals(opened);
+    }
+
+    public void open() {
+        this.opened = true;
     }
 }

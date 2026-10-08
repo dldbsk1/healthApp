@@ -35,10 +35,18 @@ public class PhotoController {
         return ApiResponse.ok("사진이 등록됐어요.", photoService.upload(userId, image, category, memo));
     }
 
-    /** 오늘 받은 사진 (밤 9시 전이면 잠금 상태로 응답) */
+    /** 오늘 받은 사진 (아직 '열기'를 안 눌렀으면 잠금 상태로 응답) */
     @GetMapping("/received/today")
     public ApiResponse<ReceivedPhotoResponse> getTodayReceived(@RequestParam Long userId) {
         return ApiResponse.ok(photoService.getTodayReceived(userId));
+    }
+
+    /** 받은 사진 '열기' 버튼 → 잠금 해제하고 사진/리액션을 응답 */
+    @PostMapping("/shares/{shareId}/open")
+    public ApiResponse<ReceivedPhotoResponse> openReceived(
+            @RequestParam Long userId,
+            @PathVariable Long shareId) {
+        return ApiResponse.ok("사진을 열었어요.", photoService.openReceived(userId, shareId));
     }
 
     /** 받은 사진에 리액션 보내기 */
