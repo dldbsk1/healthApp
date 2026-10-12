@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>DietTotalAI 파이프라인 연동 테스트</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 50px; background-color: #f9f9f9; }
+        .container { max-width: 500px; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h2 { color: #333; }
+        input[type="file"] { margin: 20px 0; display: block; }
+        button { background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background-color: #45a049; }
+        #result-box { margin-top: 30px; padding: 15px; background: #eee; border-radius: 5px; display: none; }
+        pre { white-space: pre-wrap; word-wrap: break-word; color: #333; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📸 음식 분석 API 테스트 폼</h2>
+    <p>식사 사진을 업로드하여 Spring Boot ➔ FastAPI 파이프라인을 검증합니다.</p>
+
+    <form id="uploadForm">
+        <input type="file" id="imageFile" accept="image/*" required>
+        <button type="submit">AI 분석 요청하기</button>
+    </form>
+
+    <div id="result-box">
+        <h3>📊 파이썬 AI 서버 응답 결과:</h3>
+        <pre id="jsonResult"></pre>
+    </div>
+</div>
+
+<script>
+    document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const fileInput = document.getElementById('imageFile');
+        const formData = new FormData();
+        // 컨트롤러의 @RequestParam("file")과 이름을 일치시킵니다.
+        formData.append('file', fileInput.files[0]);
+
+        const resultBox = document.getElementById('result-box');
+        const jsonResult = document.getElementById('jsonResult');
+
+        jsonResult.innerText = "분석 중... 잠시만 기다려주세요.";
+        resultBox.style.display = "block";
+
+        try {
+            // Spring Boot 컨트롤러 API 호출
+            const response = await fetch('/api/food/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            // 결과를 가독성 좋은 JSON 문자열로 출력
+            jsonResult.innerText = JSON.stringify(data, null, 4);
+        } catch (error) {
+            jsonResult.innerText = "⚠️ 에러 발생: " + error.message;
+        }
+    });
+</script>
+
+</body>
+</html>
