@@ -8,6 +8,7 @@ import com.example.dietapp.photo.entity.PhotoShare;
 import com.example.dietapp.photo.repository.PhotoLogRepository;
 import com.example.dietapp.photo.repository.PhotoReactionRepository;
 import com.example.dietapp.photo.repository.PhotoShareRepository;
+import com.example.dietapp.global.common.LogicalDay;
 import com.example.dietapp.global.file.FileStorageService;
 import com.example.dietapp.user.entity.User;
 import com.example.dietapp.user.repository.UserRepository;
@@ -32,8 +33,6 @@ public class PhotoService {
     private final UserRepository userRepository;
     private final FileStorageService fileStorageService;
 
-    // ───────────────────────── 업로드 + 랜덤 전송 ─────────────────────────
-
     @Transactional
     public PhotoLogResponse upload(Long userId, MultipartFile image, String category, String memo) {
         User user = userRepository.findById(userId)
@@ -41,10 +40,8 @@ public class PhotoService {
 
         String imageUrl = fileStorageService.upload(image, "photos");
 
-        // 오늘 이미 올린 기록이 있으면 새로 만들지 않고 덮어쓴다.
-        // (PhotoShare는 photoLog를 참조만 하고 있어서, 받은 사람도 자동으로 새 이미지를 보게 됨 —
-        //  이미 전송은 끝났으니 랜덤 전송을 다시 할 필요는 없음)
-        Optional<PhotoLog> existing = photoLogRepository.findByUserIdAndLogDate(userId, LocalDate.now());
+        // 같은 날 재업로드: 덮어쓰기 (공유는 참조라 재전송 불필요)
+        Optional<PhotoLog> existing = photoLogRepository.findByUserIdAndLogDate(userId, LogicalDay.today());
 
         if (existing.isPresent()) {
             PhotoLog photoLog = existing.get();
@@ -57,7 +54,7 @@ public class PhotoService {
                 .category(category)
                 .imageUrl(imageUrl)
                 .memo(memo)
-                .logDate(LocalDate.now())
+                .logDate(LogicalDay.today())
                 .build();
         photoLogRepository.save(photoLog);
 
@@ -66,14 +63,14 @@ public class PhotoService {
         return PhotoLogResponse.from(photoLog);
     }
 
-    /** 업로더 본인을 제외한 유저 중 한 명을 무작위로 골라 오늘 날짜로 전송(PhotoShare 생성) */
+    /** 본인 제외 랜덤 1명에게 전송 */
     private void assignRandomReceiver(PhotoLog photoLog, User uploader) {
         List<User> candidates = userRepository.findAll().stream()
                 .filter(u -> !u.getId().equals(uploader.getId()))
                 .toList();
 
         if (candidates.isEmpty()) {
-            return; // 받을 사람이 없으면(유저 1명뿐인 경우 등) 그냥 스킵
+            return; // 받을 사람 없음
         }
 
         User receiver = candidates.get((int) (Math.random() * candidates.size()));
@@ -81,31 +78,29 @@ public class PhotoService {
         PhotoShare share = PhotoShare.builder()
                 .photoLog(photoLog)
                 .receiver(receiver)
-                .sharedDate(LocalDate.now())
+                .sharedDate(LogicalDay.today())
                 .build();
         photoShareRepository.save(share);
     }
 
-    // ───────────────────────── 오늘 받은 사진 ('열기' 버튼으로 잠금 해제) ─────────────────────────
-
     public ReceivedPhotoResponse getTodayReceived(Long userId) {
         List<PhotoShare> shares =
-                photoShareRepository.findByReceiverIdAndSharedDateOrderByCreatedAtDesc(userId, LocalDate.now());
+                photoShareRepository.findByReceiverIdAndSharedDateOrderByCreatedAtDesc(userId, LogicalDay.today());
 
         if (shares.isEmpty()) {
-            return ReceivedPhotoResponse.lockedResponse(); // 오늘 받은 사진 없음 (shareId == null)
+            return ReceivedPhotoResponse.lockedResponse();
         }
 
-        PhotoShare share = shares.get(0);  // 가장 최근에 받은 것 1개만 보여줌
+        PhotoShare share = shares.get(0);  // 최신 1개
 
         if (!share.isOpened()) {
-            return ReceivedPhotoResponse.lockedResponse(share.getId()); // 도착은 했지만 아직 안 열어봄
+            return ReceivedPhotoResponse.lockedResponse(share.getId());
         }
 
         return toUnlockedResponse(share);
     }
 
-    /** '열기' 버튼 → 잠금 해제 후 사진/리액션 응답. 이미 열려 있어도 같은 결과를 돌려줌(멱등). */
+    /** 잠금 해제 (멱등) */
     @Transactional
     public ReceivedPhotoResponse openReceived(Long userId, Long shareId) {
         PhotoShare share = photoShareRepository.findByIdAndReceiverId(shareId, userId)
@@ -127,8 +122,6 @@ public class PhotoService {
                 reactions
         );
     }
-
-    // ───────────────────────── 리액션 ─────────────────────────
 
     @Transactional
     public ReactionResponse react(Long userId, Long shareId, ReactionRequest request) {
@@ -157,8 +150,6 @@ public class PhotoService {
         return ReactionResponse.from(photoReactionRepository.save(reaction));
     }
 
-    // ───────────────────────── 캘린더 (본인이 올린 사진 아카이브) ─────────────────────────
-
     public List<CalendarDayResponse> getCalendar(Long userId, int year, int month) {
         LocalDate start = LocalDate.of(year, month, 1);
         LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
@@ -167,8 +158,6 @@ public class PhotoService {
                 .map(p -> new CalendarDayResponse(p.getLogDate(), p.getImageUrl()))
                 .toList();
     }
-
-    // ───────────────────────── 날짜별 상세 (확대 + 리액션) ─────────────────────────
 
     public PhotoDetailResponse getDetail(Long userId, LocalDate date) {
         PhotoLog photoLog = photoLogRepository.findByUserIdAndLogDate(userId, date)

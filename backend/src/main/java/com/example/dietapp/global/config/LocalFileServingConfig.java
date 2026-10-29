@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-/** local 프로필에서만 필요 (S3 쓸 때는 S3 URL을 그대로 쓰므로 이 설정 자체가 불필요) */
+/** local 프로필: /files/** 정적 서빙 */
 @Configuration
 @Profile("local")
 public class LocalFileServingConfig implements WebMvcConfigurer {

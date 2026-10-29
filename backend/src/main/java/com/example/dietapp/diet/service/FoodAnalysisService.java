@@ -1,5 +1,6 @@
 package com.example.dietapp.diet.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.MediaType;
@@ -10,16 +11,21 @@ import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
+import java.time.Duration;
 
 @Service
 public class FoodAnalysisService {
 
-    // 로컬에서 구동 중인 FastAPI 서버 주소 지정
-    private final WebClient webClient = WebClient.builder()
-            .baseUrl("http://127.0.0.1:8000")
-            .build();
+    private final WebClient webClient;
 
-    // 💡 파라미터에 thickness 추가
+    private static final Duration TIMEOUT = Duration.ofSeconds(60);
+
+    public FoodAnalysisService(@Value("${ai.diet.base-url}") String dietAiBaseUrl) {
+        this.webClient = WebClient.builder()
+                .baseUrl(dietAiBaseUrl)
+                .build();
+    }
+
     public String analyzeFoodImage(MultipartFile file, double thickness) throws IOException {
 
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
@@ -30,7 +36,6 @@ public class FoodAnalysisService {
             }
         }, MediaType.parseMediaType(file.getContentType()));
 
-        // 💡 [추가] AR 두께 데이터도 파이썬으로 함께 넘겨줍니다!
         builder.part("thickness", thickness);
 
         MultiValueMap<String, HttpEntity<?>> multipartBody = builder.build();
@@ -41,6 +46,6 @@ public class FoodAnalysisService {
                 .body(BodyInserters.fromMultipartData(multipartBody))
                 .retrieve()
                 .bodyToMono(String.class)
-                .block();
+                .block(TIMEOUT);
     }
 }

@@ -29,11 +29,11 @@ public class PhotoShare {
     @JoinColumn(name = "receiver_id", nullable = false)
     private User receiver;
 
-    /** photoLog.logDate 와 동일 — 조회 편의를 위해 비정규화 */
+    /** = photoLog.logDate (조회용 비정규화) */
     @Column(name = "shared_date", nullable = false)
     private LocalDate sharedDate;
 
-    /** receiver가 '열기'를 눌렀는지. 컬럼 추가 전 기존 데이터(null)는 false로 취급하려고 Boolean(래퍼)을 씀 */
+    /** 기존 null 데이터 대응용 Boolean */
     @Column(name = "opened")
     private Boolean opened = false;
 

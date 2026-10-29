@@ -14,12 +14,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.UUID;
 
-/**
- * AWS S3에 업로드. spring.profiles.active 에 "local"이 없을 때(=배포 환경) 기본으로 선택된다.
- * application.yml의 file.storage.s3.* 설정을 사용.
- * 버킷이 퍼블릭 읽기로 설정되어 있다는 전제로 URL을 바로 조립한다 —
- * 비공개 버킷을 쓸 거면 presigned URL 발급 방식으로 바꿔야 한다.
- */
+/** S3 업로드 (local 외 프로필, 퍼블릭 버킷 전제 — 비공개면 presigned URL 필요) */
 @Slf4j
 @Service
 @Profile("!local")

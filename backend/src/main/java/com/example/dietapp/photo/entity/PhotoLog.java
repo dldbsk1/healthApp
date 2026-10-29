@@ -49,7 +49,7 @@ public class PhotoLog {
         this.logDate = logDate;
     }
 
-    /** 같은 날 재업로드 시 기존 기록을 덮어쓸 때 사용 */
+    /** 같은 날 재업로드 */
     public void overwrite(String category, String imageUrl, String memo) {
         this.category = category;
         this.imageUrl = imageUrl;

@@ -9,12 +9,12 @@ public record ReceivedPhotoResponse(
         String uploaderNickname,
         List<ReactionResponse> reactions
 ) {
-    /** 오늘 받은 사진이 없을 때 */
+    /** 받은 사진 없음 */
     public static ReceivedPhotoResponse lockedResponse() {
         return new ReceivedPhotoResponse(true, null, null, null, List.of());
     }
 
-    /** 사진은 도착했지만 아직 열어보지 않았을 때 (shareId만 내려줌) */
+    /** 도착, 미열람 */
     public static ReceivedPhotoResponse lockedResponse(Long shareId) {
         return new ReceivedPhotoResponse(true, shareId, null, null, List.of());
     }

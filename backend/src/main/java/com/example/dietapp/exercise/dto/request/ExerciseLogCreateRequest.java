@@ -6,10 +6,7 @@ import jakarta.validation.constraints.Positive;
 
 import java.time.LocalDateTime;
 
-/**
- * 운동탭 - '운동 완료' 시 프론트에서 보내는 요청.
- * score/feedback/caloriesBurned 는 자세 분석 서버 결과가 아직 없으면 null 가능.
- */
+/** 운동 완료 요청 (분석 전이면 score / feedback / caloriesBurned null) */
 public record ExerciseLogCreateRequest(
 
         @NotBlank(message = "운동 이름은 필수입니다.")

@@ -16,22 +16,48 @@ public class DietLogController {
 
     private final DietLogService dietLogService;
 
-    // ✅ 기존: 식단 기록 저장 API (수정 없음)
     @PostMapping("/log")
-    public DietLog recordDiet(@RequestBody Map<String, Object> requestData) {
-        return dietLogService.saveDietLog(requestData);
+    public ResponseEntity<?> recordDiet(@RequestBody Map<String, Object> requestData) {
+        try {
+            return ResponseEntity.ok(dietLogService.saveDietLog(requestData));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
-    // 🌟 [추가됨] 하루 식단 목록 조회 API (GET)
+    // 오늘 기록 (date 미사용, 새벽 4시 기준)
     @GetMapping("/log")
     public ResponseEntity<List<DietLog>> getDailyLogs(
             @RequestParam("userId") String userId,
             @RequestParam("date") String date) {
 
-        // 💡 중요: DietLogService에 아래 메서드가 없다면 새로 만들어주셔야 합니다!
-        // (메서드 이름은 실제 Service에 만드신/만드실 이름에 맞게 변경하세요)
         List<DietLog> dailyLogs = dietLogService.findLogsByUserIdAndDate(userId, date);
 
         return ResponseEntity.ok(dailyLogs);
+    }
+
+    // 본인 기록만 수정
+    @PutMapping("/log/{id}")
+    public ResponseEntity<?> updateLog(
+            @PathVariable("id") Long id,
+            @RequestBody Map<String, Object> requestData) {
+        try {
+            return ResponseEntity.ok(dietLogService.updateDietLog(id, requestData));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    // 본인 기록만 삭제
+    @DeleteMapping("/log/{id}")
+    public ResponseEntity<?> deleteLog(
+            @PathVariable("id") Long id,
+            @RequestParam("userId") String userId) {
+        try {
+            dietLogService.deleteDietLog(id, userId);
+            return ResponseEntity.ok("삭제되었습니다.");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 }

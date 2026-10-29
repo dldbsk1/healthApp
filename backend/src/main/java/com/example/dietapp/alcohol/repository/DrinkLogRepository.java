@@ -1,7 +1,7 @@
 package com.example.dietapp.alcohol.repository;
 
 import com.example.dietapp.alcohol.entity.DrinkLog;
-import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.jpa.repository.JpaRepository;
 
-public interface DrinkLogRepository extends MongoRepository<DrinkLog, String> {
+public interface DrinkLogRepository extends JpaRepository<DrinkLog, Long> {
 }

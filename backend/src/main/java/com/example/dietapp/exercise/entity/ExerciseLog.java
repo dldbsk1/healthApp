@@ -38,10 +38,9 @@ public class ExerciseLog {
     @Column(name = "calories_burned")
     private Integer caloriesBurned;
 
-    /** 자세 분석 서버가 산출한 정확도 점수 (0~100) */
+    /** 자세 정확도 (0~100) */
     private Double score;
 
-    /** 자세 분석 서버가 산출한 피드백 텍스트 */
     @Lob
     private String feedback;
 
@@ -67,7 +66,6 @@ public class ExerciseLog {
         this.exercisedAt = exercisedAt;
     }
 
-    /** 자세 분석 서버 결과가 나중에 도착했을 때 갱신 */
     public void updateAnalysisResult(Double score, String feedback, Integer caloriesBurned) {
         this.score = score;
         this.feedback = feedback;

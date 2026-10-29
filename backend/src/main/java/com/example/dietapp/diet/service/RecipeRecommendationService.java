@@ -1,126 +1,90 @@
 package com.example.dietapp.diet.service;
 
+import com.example.dietapp.user.service.UserIdResolver;
 import com.example.dietapp.diet.dto.DietLogDto;
 import com.example.dietapp.diet.entity.DietLog;
+import com.example.dietapp.global.common.LogicalDay;
 import com.example.dietapp.diet.entity.DietMenu;
 import com.example.dietapp.user.entity.User;
 import com.example.dietapp.diet.repository.DietLogRepository;
 import com.example.dietapp.diet.repository.DietMenuRepository;
-import com.example.dietapp.user.repository.UserRepository;
+import com.example.dietapp.diet.service.RecommendationFeedbackService.Personalization;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-/**
- * 식단/안주 추천 서비스 (내부 DB 전용)
- * - diet_menus 컬렉션의 칼로리·탄단지는 모두 "1인분" 기준입니다.
- * - 응답의 amount는 항상 1.0(인분), unit은 "인분" 입니다. (인분 조절은 클라이언트 슬라이더에서 배율 적용)
- */
+/** 식단·안주 추천: 칼로리 상한 필터 → MenuScorer 점수 → 샘플링 → 추천 이력 기록 (1인분 기준) */
 @Service
 @RequiredArgsConstructor
 public class RecipeRecommendationService {
 
-    private final Random random = new Random();
-
-    // "다른 메뉴 추천받기"를 눌렀을 때 직전과 같은 메뉴가 연속으로 나오지 않도록 기억 (서버 재시작 시 초기화)
-    private final Map<String, String> lastRecommended = new ConcurrentHashMap<>();
+    private static final double DEFAULT_RECOMMENDED_KCAL = 2000.0;
+    private static final double PROTEIN_PER_KG = 1.2;           // g/kg
+    private static final double DEFAULT_PROTEIN_TARGET = 60.0;
 
     private final DietMenuRepository dietMenuRepository;
     private final DietLogRepository dietLogRepository;
-    private final UserRepository userRepository;
+    private final UserIdResolver userIdResolver;
+    private final MenuScorer menuScorer;
+    private final RecommendationFeedbackService feedbackService;
 
-    // 해당 카테고리에 메뉴가 없을 때 대신 사용할 카테고리
-    private static final Map<String, List<String>> PAIRING_FALLBACK_CATEGORIES = Map.of(
-            "스파클링 와인", List.of("화이트 와인"),
-            "블렌디드 위스키", List.of("싱글 몰트 위스키"),
-            "버번 위스키", List.of("싱글 몰트 위스키")
-    );
+    private record Today(User user, Long uid, List<DietLog> logs, double remainingKcal, double remainingProtein) {}
 
-    // ───────────── 오늘(새벽 4시 기준) 기록 / 남은 칼로리 ─────────────
+    private Today loadToday(String userIdentifier) {
+        User user = userIdResolver.findUser(userIdentifier).orElse(null);
+        Long uid = user == null ? null : user.getId();
+        List<DietLog> logs = uid == null ? new ArrayList<>() : findTodayLogs(uid);
 
-    private List<DietLog> findTodayLogs(String userId) {
-        if (userId == null || userId.trim().isEmpty()) {
-            return new ArrayList<>();
-        }
-        LocalDateTime now = LocalDateTime.now();
-        LocalTime currentTime = now.toLocalTime();
-        LocalDate logicalToday = currentTime.isBefore(LocalTime.of(4, 0)) ? now.toLocalDate().minusDays(1) : now.toLocalDate();
+        // 술 칼로리도 diet_logs 에 포함
+        Integer kcal = user == null ? null : user.getRecommendedCalories();
+        double recommended = (kcal != null && kcal > 0) ? kcal : DEFAULT_RECOMMENDED_KCAL;
+        double consumedKcal = logs.stream().mapToDouble(DietLog::getCalories).sum();
 
-        LocalDateTime start = logicalToday.atTime(4, 0, 0);
-        LocalDateTime end = logicalToday.plusDays(1).atTime(3, 59, 59, 999999999);
+        Double weight = user == null ? null : user.getWeight();
+        double proteinTarget = (weight != null && weight > 0) ? weight * PROTEIN_PER_KG : DEFAULT_PROTEIN_TARGET;
+        double consumedProtein = logs.stream().mapToDouble(DietLog::getProtein).sum();
 
-        return dietLogRepository.findByUserIdAndEatenAtBetween(userId, start, end);
+        return new Today(user, uid, logs, recommended - consumedKcal, proteinTarget - consumedProtein);
     }
 
-    private double calculateRemainingCalories(String userId, List<DietLog> todayLogs) {
-        if (userId == null || userId.trim().isEmpty()) {
-            return 2000.0;
-        }
-
-        User user = userRepository.findByEmail(userId).orElse(null);
-        if (user == null) {
-            return 2000.0;
-        }
-
-        double consumed = todayLogs.stream().mapToDouble(DietLog::getCalories).sum();
-
-        double recommended = user.getRecommendedCalories();
-        if (recommended <= 0) recommended = 2000.0;
-
-        return recommended - consumed;
+    private List<DietLog> findTodayLogs(Long uid) {
+        LocalDate today = LogicalDay.today();
+        return dietLogRepository.findByUserIdAndEatenAtBetween(uid, LogicalDay.start(today), LogicalDay.end(today));
     }
-
-    // ───────────── 추천 진입점 ─────────────
 
     public DietLogDto getRandomRecipeByDietType(String dietType, String userId) {
-        List<DietLog> todayLogs = findTodayLogs(userId);
-        double remaining = calculateRemainingCalories(userId, todayLogs);
-        double maxCalories = remaining <= 200.0 ? 300.0 : Math.min(remaining, 650.0);
+        Today today = loadToday(userId);
+        double maxCalories = today.remainingKcal() <= 200.0 ? 300.0 : Math.min(today.remainingKcal(), 650.0);
 
         String type = (dietType == null || dietType.isBlank()) ? "BALANCED" : dietType.toUpperCase();
 
-        List<DietMenu> candidates = dietMenuRepository.findByDietType(type);
-        DietMenu picked = pickMenu(candidates, maxCalories, todayLogs, userId + "|D|" + type);
-
-        if (picked == null) {
-            return createFallbackMenu();
-        }
-        return convertToDto(picked);
+        DietLogDto dto = recommend(today, "D|" + type, dietMenuRepository.findByDietType(type), maxCalories, null, null);
+        return dto != null ? dto : createFallbackMenu();
     }
 
     public DietLogDto getPairingRecipeByDrink(String drinkName, String userId) {
-        List<DietLog> todayLogs = findTodayLogs(userId);
-        double remaining = calculateRemainingCalories(userId, todayLogs);
-        double maxCalories = remaining <= 200.0 ? 300.0 : Math.min(remaining, 800.0);
+        Today today = loadToday(userId);
 
         String category = getGenericDrinkCategory(drinkName);
+        DrinkProfile profile = DrinkProfile.of(category);
 
-        // 요청 카테고리 → (비어 있으면) 대체 카테고리 순서로 탐색
-        List<String> categories = new ArrayList<>();
-        categories.add(category);
-        categories.addAll(PAIRING_FALLBACK_CATEGORIES.getOrDefault(category, List.of()));
+        // 마실 양 미정 → 술 칼로리 미차감, 남은 칼로리 기준
+        double maxCalories = today.remainingKcal() <= 200.0 ? 300.0 : Math.min(today.remainingKcal(), 800.0);
 
-        DietMenu picked = null;
-        for (String c : categories) {
-            picked = pickMenu(dietMenuRepository.findByPairedDrink(c), maxCalories, todayLogs, userId + "|P|" + c);
-            if (picked != null) break;
-        }
+        // 프로필 있음: 전체 메뉴 태그 매칭 / 없음: pairedDrink 매핑
+        List<DietMenu> candidates = profile != null
+                ? dietMenuRepository.findAll()
+                : dietMenuRepository.findByPairedDrink(category);
 
-        if (picked == null) {
-            return createFallbackPairing();
-        }
-        return convertToDto(picked);
+        DietLogDto dto = recommend(today, "P|" + category, candidates, maxCalories, category, profile);
+        return dto != null ? dto : createFallbackPairing();
     }
 
     private String getGenericDrinkCategory(String drinkName) {
@@ -144,12 +108,37 @@ public class RecipeRecommendationService {
         }
     }
 
-    // ───────────── 메뉴 선택 ─────────────
+    /** 후보 없으면 null → 폴백 */
+    private DietLogDto recommend(Today today, String context, List<DietMenu> menus, double maxCalories,
+                                 String category, DrinkProfile profile) {
+        List<DietMenu> pool = withinCalories(menus, maxCalories);
+        if (pool.isEmpty()) return null;
 
-    private DietMenu pickMenu(List<DietMenu> menus, double maxCalories, List<DietLog> todayLogs, String memoryKey) {
-        if (menus == null || menus.isEmpty()) return null;
+        Personalization personalization = today.uid() == null ? Personalization.NONE : feedbackService.load(today.uid());
+        List<String> recent = today.uid() == null ? List.of() : feedbackService.recentShownFoods(today.uid(), context);
+        String dietPreference = today.user() == null ? null : today.user().getDietPreference();
 
-        // 1. 칼로리 상한 이내 메뉴 (하나도 없으면 가장 가벼운 3개로 대체)
+        MenuScorer.Context sc = new MenuScorer.Context(category, profile, maxCalories, today.logs(),
+                dietPreference, today.remainingProtein(), recent, personalization);
+
+        List<MenuScorer.Breakdown> scored = pool.stream()
+                .map(m -> menuScorer.score(m, sc))
+                .filter(b -> profile == null || b.fits())
+                .collect(Collectors.toList());
+
+        MenuScorer.Breakdown picked = menuScorer.select(scored);
+        if (picked == null) return null;
+
+        Long recommendationId = null;
+        if (today.uid() != null) {
+            recommendationId = feedbackService.recordShown(today.uid(), context, picked.menu().getFoodName()).getId();
+        }
+        return convertToDto(picked, category, recommendationId);
+    }
+
+    // 상한 내 메뉴, 없으면 가장 가벼운 3개
+    private List<DietMenu> withinCalories(List<DietMenu> menus, double maxCalories) {
+        if (menus == null || menus.isEmpty()) return new ArrayList<>();
         List<DietMenu> pool = menus.stream()
                 .filter(m -> m.getCalories() != null && m.getCalories() <= maxCalories)
                 .collect(Collectors.toList());
@@ -159,39 +148,18 @@ public class RecipeRecommendationService {
                     .sorted(Comparator.comparingDouble(DietMenu::getCalories))
                     .limit(3)
                     .collect(Collectors.toList());
-            if (pool.isEmpty()) return null;
         }
-
-        // 2. 오늘 이미 기록한 메뉴는 제외 (후보가 남아 있을 때만)
-        List<DietMenu> notEatenYet = pool.stream()
-                .filter(m -> m.getFoodName() != null && todayLogs.stream()
-                        .noneMatch(l -> l.getFoodName() != null && l.getFoodName().contains(m.getFoodName())))
-                .collect(Collectors.toList());
-        if (!notEatenYet.isEmpty()) pool = notEatenYet;
-
-        // 3. 직전에 추천한 메뉴는 제외 (후보가 2개 이상일 때만)
-        String last = lastRecommended.get(memoryKey);
-        if (last != null && pool.size() > 1) {
-            List<DietMenu> notLast = pool.stream()
-                    .filter(m -> !last.equals(m.getFoodName()))
-                    .collect(Collectors.toList());
-            if (!notLast.isEmpty()) pool = notLast;
-        }
-
-        DietMenu picked = pool.get(random.nextInt(pool.size()));
-        lastRecommended.put(memoryKey, picked.getFoodName());
-        return picked;
+        return pool;
     }
 
-    // ───────────── DTO 변환 / 대체 메뉴 ─────────────
-
-    // 메뉴 이름은 DB에 저장된 그대로 내려줍니다. (검색 결과와 동일한 이름으로 기록되도록 [분류] 접두어 없음)
-    private DietLogDto convertToDto(DietMenu menu) {
+    // 검색 결과와 같은 이름 유지
+    private DietLogDto convertToDto(MenuScorer.Breakdown picked, String category, Long recommendationId) {
+        DietMenu menu = picked.menu();
         return DietLogDto.builder()
                 .userId("")
                 .mealType("")
                 .foodName(menu.getFoodName())
-                .amount(1.0)      // 1인분 기준
+                .amount(1.0)      // 인분
                 .unit("인분")
                 .calories(menu.getCalories())
                 .carbs(menu.getCarbs())
@@ -199,10 +167,13 @@ public class RecipeRecommendationService {
                 .fat(menu.getFat())
                 .imageUrl(menu.getImageUrl())
                 .eatenAt(LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))
+                .recommendationId(recommendationId)
+                .reason(picked.reason(category))
+                .scoreBreakdown(picked.asMap())
                 .build();
     }
 
-    // DB에 해당 카테고리 메뉴가 하나도 없을 때만 쓰이는 최후의 대체 메뉴 (1인분 기준)
+    // DB에 후보 없을 때 폴백
     private DietLogDto createFallbackMenu() {
         return DietLogDto.builder()
                 .userId("")
