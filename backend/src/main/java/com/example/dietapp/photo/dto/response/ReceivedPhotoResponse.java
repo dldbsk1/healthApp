@@ -2,10 +2,6 @@ package com.example.dietapp.photo.dto.response;
 
 import java.util.List;
 
-/**
- * SNS탭 "받은 사진" 카드.
- * locked=true 면 밤 9시가 아직 안 지난 상태 — 이때는 imageUrl/reactions 를 내려주지 않는다.
- */
 public record ReceivedPhotoResponse(
         boolean locked,
         Long shareId,
@@ -13,7 +9,13 @@ public record ReceivedPhotoResponse(
         String uploaderNickname,
         List<ReactionResponse> reactions
 ) {
+    /** 오늘 받은 사진이 없을 때 */
     public static ReceivedPhotoResponse lockedResponse() {
         return new ReceivedPhotoResponse(true, null, null, null, List.of());
+    }
+
+    /** 사진은 도착했지만 아직 열어보지 않았을 때 (shareId만 내려줌) */
+    public static ReceivedPhotoResponse lockedResponse(Long shareId) {
+        return new ReceivedPhotoResponse(true, shareId, null, null, List.of());
     }
 }

@@ -39,10 +39,23 @@ public class User extends BaseTimeEntity {
     @Column(name = "diet_type")
     private String dietType;
 
+    @Column(name = "recommended_calories")
+    private Integer recommendedCalories;
+
     @Builder
-    public User(String email, String password, String nickname, String gender,
-                Integer age, Double height, Double weight, Double targetWeight,
-                String activityLevel, String dietType) {
+    public User(
+            String email,
+            String password,
+            String nickname,
+            String gender,
+            Integer age,
+            Double height,
+            Double weight,
+            Double targetWeight,
+            String activityLevel,
+            String dietType,
+            Integer recommendedCalories
+    ) {
         this.email = email;
         this.password = password;
         this.nickname = nickname;
@@ -53,5 +66,29 @@ public class User extends BaseTimeEntity {
         this.targetWeight = targetWeight;
         this.activityLevel = activityLevel;
         this.dietType = dietType;
+        this.recommendedCalories = recommendedCalories;
+    }
+
+    // 프로필 수정
+    public void updateProfile(
+            String gender,
+            Integer age,
+            Double height,
+            Double weight,
+            String activityLevel,
+            String dietType,
+            Integer recommendedCalories
+    ) {
+        this.gender = gender;
+        this.age = age;
+        this.height = height;
+        this.weight = weight;
+        this.activityLevel = activityLevel;
+        this.dietType = dietType;
+        this.recommendedCalories = recommendedCalories;
+    }
+
+    public String getDietPreference() {
+        return this.dietType;
     }
 }

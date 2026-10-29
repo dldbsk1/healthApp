@@ -48,4 +48,11 @@ public class PhotoLog {
         this.memo = memo;
         this.logDate = logDate;
     }
+
+    /** 같은 날 재업로드 시 기존 기록을 덮어쓸 때 사용 */
+    public void overwrite(String category, String imageUrl, String memo) {
+        this.category = category;
+        this.imageUrl = imageUrl;
+        this.memo = memo;
+    }
 }

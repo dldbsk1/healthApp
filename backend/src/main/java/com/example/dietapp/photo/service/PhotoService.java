@@ -18,7 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -26,18 +25,6 @@ import java.util.Optional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class PhotoService {
-
-<<<<<<< HEAD
-    /** 이 시각이 지나야 받은 사진이 공개된다 */
-    private static final LocalTime REVEAL_TIME = LocalTime.of(21, 0);
-=======
-    @org.springframework.beans.factory.annotation.Value("${photo.reveal-time:21:00}")
-    private String revealTimeValue;
-
-    private LocalTime revealTime() {
-        return LocalTime.parse(revealTimeValue);
-    }
->>>>>>> 525ff0a (backend)
 
     private final PhotoLogRepository photoLogRepository;
     private final PhotoShareRepository photoShareRepository;
@@ -53,6 +40,17 @@ public class PhotoService {
                 .orElseThrow(() -> new EntityNotFoundException("존재하지 않는 사용자입니다. id=" + userId));
 
         String imageUrl = fileStorageService.upload(image, "photos");
+
+        // 오늘 이미 올린 기록이 있으면 새로 만들지 않고 덮어쓴다.
+        // (PhotoShare는 photoLog를 참조만 하고 있어서, 받은 사람도 자동으로 새 이미지를 보게 됨 —
+        //  이미 전송은 끝났으니 랜덤 전송을 다시 할 필요는 없음)
+        Optional<PhotoLog> existing = photoLogRepository.findByUserIdAndLogDate(userId, LocalDate.now());
+
+        if (existing.isPresent()) {
+            PhotoLog photoLog = existing.get();
+            photoLog.overwrite(category, imageUrl, memo);
+            return PhotoLogResponse.from(photoLog);
+        }
 
         PhotoLog photoLog = PhotoLog.builder()
                 .user(user)
@@ -88,38 +86,36 @@ public class PhotoService {
         photoShareRepository.save(share);
     }
 
-    // ───────────────────────── 오늘 받은 사진 (밤 9시 잠금) ─────────────────────────
-
-<<<<<<< HEAD
-    public ReceivedPhotoResponse getTodayReceived(Long userId) {
-        Optional<PhotoShare> shareOpt =
-                photoShareRepository.findByReceiverIdAndSharedDate(userId, LocalDate.now());
-
-        if (shareOpt.isEmpty()) {
-            return ReceivedPhotoResponse.lockedResponse(); // 오늘 전송받은 게 없을 때도 동일한 형태로 응답
-        }
-
-        if (LocalTime.now().isBefore(REVEAL_TIME)) {
-            return ReceivedPhotoResponse.lockedResponse();
-        }
-
-        PhotoShare share = shareOpt.get();
-=======
+    // ───────────────────────── 오늘 받은 사진 ('열기' 버튼으로 잠금 해제) ─────────────────────────
 
     public ReceivedPhotoResponse getTodayReceived(Long userId) {
         List<PhotoShare> shares =
                 photoShareRepository.findByReceiverIdAndSharedDateOrderByCreatedAtDesc(userId, LocalDate.now());
 
         if (shares.isEmpty()) {
-            return ReceivedPhotoResponse.lockedResponse();
-        }
-
-        if (LocalTime.now().isBefore(revealTime())) {
-            return ReceivedPhotoResponse.lockedResponse();
+            return ReceivedPhotoResponse.lockedResponse(); // 오늘 받은 사진 없음 (shareId == null)
         }
 
         PhotoShare share = shares.get(0);  // 가장 최근에 받은 것 1개만 보여줌
->>>>>>> 525ff0a (backend)
+
+        if (!share.isOpened()) {
+            return ReceivedPhotoResponse.lockedResponse(share.getId()); // 도착은 했지만 아직 안 열어봄
+        }
+
+        return toUnlockedResponse(share);
+    }
+
+    /** '열기' 버튼 → 잠금 해제 후 사진/리액션 응답. 이미 열려 있어도 같은 결과를 돌려줌(멱등). */
+    @Transactional
+    public ReceivedPhotoResponse openReceived(Long userId, Long shareId) {
+        PhotoShare share = photoShareRepository.findByIdAndReceiverId(shareId, userId)
+                .orElseThrow(() -> new EntityNotFoundException("전송받은 사진을 찾을 수 없습니다. id=" + shareId));
+
+        share.open();
+        return toUnlockedResponse(share);
+    }
+
+    private ReceivedPhotoResponse toUnlockedResponse(PhotoShare share) {
         List<ReactionResponse> reactions = photoReactionRepository.findByPhotoShareId(share.getId())
                 .stream().map(ReactionResponse::from).toList();
 
@@ -132,10 +128,6 @@ public class PhotoService {
         );
     }
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 525ff0a (backend)
     // ───────────────────────── 리액션 ─────────────────────────
 
     @Transactional
@@ -143,12 +135,8 @@ public class PhotoService {
         PhotoShare share = photoShareRepository.findByIdAndReceiverId(shareId, userId)
                 .orElseThrow(() -> new EntityNotFoundException("전송받은 사진을 찾을 수 없습니다. id=" + shareId));
 
-<<<<<<< HEAD
-        if (LocalTime.now().isBefore(REVEAL_TIME)) {
-=======
-        if (LocalTime.now().isBefore(revealTime())) {
->>>>>>> 525ff0a (backend)
-            throw new IllegalStateException("아직 공개되지 않은 사진입니다.");
+        if (!share.isOpened()) {
+            throw new IllegalStateException("아직 열어보지 않은 사진입니다.");
         }
 
         boolean alreadyReacted = photoReactionRepository
