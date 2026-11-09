@@ -56,7 +56,7 @@ async def run(source, exercise):
                     if wait > 0:
                         await asyncio.sleep(wait)
 
-                _, jpg = cv2.imencode(".jpg", frame)
+                _, jpg = cv2.imencode(".jpg", frame) 
                 await ws.send(jpg.tobytes())
                 last_sent_at = asyncio.get_event_loop().time()
 

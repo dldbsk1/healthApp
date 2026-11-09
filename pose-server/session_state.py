@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
+from collections import deque
 from time import time
+
+# ── 플랭크 '정상 자세 유지 시간' 판정 ──
+GOOD_CORE_MIN_WEIGHT = 2    # 가중치 2 이상 항목(목~골반 / 엉덩이 높이 / 다리 일직선)이 전부 통과해야 '정상'
+GOOD_WINDOW = 5             # 최근 5프레임 중
+GOOD_MIN_RATIO = 0.6        # 60% 이상이 정상이면 정상 유지로 인정 (한두 프레임 튐 무시)
+GOOD_MAX_DT = 1.0           # 프레임 간격이 이보다 길면(끊김) 1초까지만 인정
 
 
 class ExerciseSession:
@@ -20,18 +27,66 @@ class ExerciseSession:
 
         self.started_at = time()
 
+        # 반복 운동: 실시간 반복 횟수 (ExerciseEvaluator.rep_count 를 main 에서 매 프레임 복사)
+        self.rep_count = 0
+
+        # 플랭크: 자세를 잡고 버틴 시간 / 그중 정상 자세로 버틴 시간
+        self.hold_seconds = 0.0
+        self._last_hold_t = None
+        self.good_seconds = 0.0
+        self._good_hist = deque(maxlen=GOOD_WINDOW)
+        self._last_t = None
+
     def mark_person_seen(self):
         self.miss_streak = 0
 
     def mark_person_missed(self):
         self.miss_streak += 1
+        self._last_t = None          # 끊긴 구간은 유지 시간에 넣지 않음
+        self._last_hold_t = None
+        self._good_hist.clear()
 
     def record_frame(self, results: list, phase: str, score: int):
         now = time()
-        if results:
-            self.result_history.append(results)
+        # carry=True 는 '직전 반복 결과를 화면에 다시 띄운 것'이라 통계에서 제외 (반복당 항목이 중복 집계되지 않게)
+        scored = [r for r in results if not r.get("carry")]
+        if scored:
+            self.result_history.append(scored)
             self.score_history.append(score)
         self.phase_history.append((phase, now))
+
+        if self.exercise_name == "플랭크":
+            self._update_hold(phase, now)
+            self._update_good_hold(scored, now)
+
+    def _update_hold(self, phase: str, now: float):
+        """자세를 잡고 운동 중(down)인 시간 누적. 프레임 간격이 너무 길면(끊김) 1초까지만 인정."""
+        if phase == "down":
+            if self._last_hold_t is not None:
+                self.hold_seconds += min(now - self._last_hold_t, GOOD_MAX_DT)
+            self._last_hold_t = now
+        else:
+            self._last_hold_t = None
+
+    def live_stats(self) -> dict:
+        """프레임마다 앱으로 보내는 실시간 집계. 해당 없는 값은 None."""
+        if self.exercise_name == "플랭크":
+            return {"rep_count": None,
+                    "hold_seconds": round(self.hold_seconds, 1),
+                    "good_hold_seconds": round(self.good_seconds, 1)}
+        return {"rep_count": self.rep_count, "hold_seconds": None, "good_hold_seconds": None}
+
+    def _update_good_hold(self, results: list, now: float):
+        dt = 0.0 if self._last_t is None else min(now - self._last_t, GOOD_MAX_DT)
+        self._last_t = now
+
+        core = [r for r in results if r.get("weight", 1) >= GOOD_CORE_MIN_WEIGHT]
+        good = bool(core) and all(r["ok"] for r in core)
+        self._good_hist.append(good)
+
+        if (dt > 0 and len(self._good_hist) >= 3
+                and sum(self._good_hist) / len(self._good_hist) >= GOOD_MIN_RATIO):
+            self.good_seconds += dt
 
     @staticmethod
     def _most_common(items: list):
@@ -91,35 +146,14 @@ class ExerciseSession:
 
         rep_count = None
         hold_seconds = None
+        good_hold_seconds = None
 
         if self.exercise_name == "플랭크":
-            hold_seconds = 0.0
-            for i in range(1, len(self.phase_history)):
-                prev_phase, prev_t = self.phase_history[i - 1]
-                cur_phase, cur_t = self.phase_history[i]
-                if prev_phase == "down" and cur_phase == "down":
-                    hold_seconds += (cur_t - prev_t)
-            hold_seconds = round(hold_seconds, 1)
+            good_hold_seconds = round(self.good_seconds, 1)
+            hold_seconds = round(self.hold_seconds, 1)
         else:
-            # "none"(인식 실패)은 제외하고, 실제 판독된 것만 시간순으로 모음
-            valid_phases = [p for p, _ in self.phase_history if p != "none"]
-
-            # 프레임 단위 흔들림(노이즈) 제거: 최근 SMOOTH_WINDOW개 판독값의 다수결로 스무딩
-            SMOOTH_WINDOW = 2
-            smoothed = []
-            for i in range(len(valid_phases)):
-                lo = max(0, i - SMOOTH_WINDOW + 1)
-                window_vals = valid_phases[lo:i + 1]
-                majority = max(set(window_vals), key=window_vals.count)
-                smoothed.append(majority)
-
-            rep_count = 0
-            stable_phase = "up"
-            for phase in smoothed:
-                if phase != stable_phase:
-                    if stable_phase == "up" and phase == "down":
-                        rep_count += 1
-                    stable_phase = phase
+            # 실시간 화면에 보여준 횟수와 같은 값 (ExerciseEvaluator 가 센 것)
+            rep_count = self.rep_count
 
         return {
             "status": "session_summary",
@@ -129,6 +163,7 @@ class ExerciseSession:
             "durationSec": round(duration_sec, 1),
             "repCount": rep_count,
             "holdSeconds": hold_seconds,
+            "goodHoldSeconds": good_hold_seconds,   # 플랭크만: 정상 자세로 버틴 시간(추정치)
             "itemScores": item_scores,
             "feedbacks": feedbacks,
         }

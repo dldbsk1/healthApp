@@ -15,7 +15,7 @@ from ultralytics import YOLO
 from pathlib import Path
 
 from config import YOLO_POSE_ONNX, LSTM_ONNX, YOLO_POSE_PT, LSTM_PTH
-from pose_rules import evaluate_pose
+from pose_rules import ExerciseEvaluator
 from lstm import ExerciseLSTM
 
 # ===================== 설정 =====================
@@ -432,18 +432,29 @@ def analyze_video(source, progress_cb=None, skeleton_out=None, debug=False, det_
     phase_count = {"down": 0, "up": 0, "none": 0}
     phase_seq = []
 
+    # 상태를 가진 평가기 (가까운 쪽 고정, 반복당 극값 추적). 영상 하나당 1개.
+    evaluator = ExerciseEvaluator(exercise)
+    aspect = (sampled[0][1] / sampled[0][2]) if sampled else 1.0   # 각도 왜곡 보정용 w/h
+    good_frames = 0   # 플랭크: 핵심 항목이 모두 통과한 프레임 수
+
     for norm in norm_frames:
         if norm is None:
             phase_seq.append("none")
             phase_count["none"] += 1
             continue
 
-        results, phase = evaluate_pose(exercise, norm)
+        results, phase = evaluator.evaluate(norm, aspect=aspect)
 
         phase_count[phase] = phase_count.get(phase, 0) + 1
         phase_seq.append(phase)
 
+        core = [r for r in results if r.get("weight", 1) >= 2]
+        if exercise == "플랭크" and core and all(r["ok"] for r in core):
+            good_frames += 1
+
         for r in results:
+            if r.get("carry"):      # 직전 반복 결과를 다시 띄운 것 — 통계 중복 방지
+                continue
             item_ok.setdefault(r["label"], []).append(1 if r["ok"] else 0)
             item_weight[r["label"]] = r.get("weight", 1)
 
@@ -513,36 +524,16 @@ def analyze_video(source, progress_cb=None, skeleton_out=None, debug=False, det_
 
     rep_count = None
     hold_seconds = None
+    good_hold_seconds = None
 
     if exercise == "플랭크":
         hold_frames = phase_count.get("down", 0)
         hold_seconds = round(hold_frames / eff_fps, 1)
+        good_hold_seconds = round(good_frames / eff_fps, 1)
 
     else:
-        min_hold = max(int(eff_fps * 0.2), 2)
-        rep_count = 0
-
-        stable_phase = "up"
-        run_phase = None
-        run_len = 0
-
-        for ph in phase_seq:
-            if ph == "none":
-                run_phase = None
-                run_len = 0
-                continue
-
-            if ph == run_phase:
-                run_len += 1
-            else:
-                run_phase = ph
-                run_len = 1
-
-            if run_len >= min_hold and ph != stable_phase:
-                if stable_phase == "up" and ph == "down":
-                    rep_count += 1
-
-                stable_phase = ph
+        # 실시간 분석과 같은 방식(ExerciseEvaluator 가 센 값)으로 통일
+        rep_count = evaluator.rep_count
 
     if progress_cb:
         progress_cb(1.0)
@@ -559,4 +550,5 @@ def analyze_video(source, progress_cb=None, skeleton_out=None, debug=False, det_
         "kp_conf_mean": kp_conf_mean,
         "rep_count": rep_count,
         "hold_seconds": hold_seconds,
+        "good_hold_seconds": good_hold_seconds,
     }
