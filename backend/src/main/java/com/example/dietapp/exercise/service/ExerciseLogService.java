@@ -6,7 +6,6 @@ import com.example.dietapp.exercise.entity.ExerciseLog;
 import com.example.dietapp.exercise.repository.ExerciseLogRepository;
 import com.example.dietapp.user.entity.User;
 import com.example.dietapp.user.repository.UserRepository;
-import com.example.dietapp.global.common.LogicalDay;
 import com.example.dietapp.global.exception.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -14,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 
 @Service
@@ -24,6 +24,7 @@ public class ExerciseLogService {
     private final ExerciseLogRepository exerciseLogRepository;
     private final UserRepository userRepository;
 
+    /** 운동탭 - '운동 완료' 버튼 클릭 시 호출 */
     @Transactional
     public ExerciseLogResponse createLog(Long userId, ExerciseLogCreateRequest request) {
         User user = userRepository.findById(userId)
@@ -31,8 +32,11 @@ public class ExerciseLogService {
 
         Integer caloriesBurned = request.caloriesBurned();
         if (caloriesBurned == null) {
+            double seconds = (request.durationSec() != null)
+                    ? request.durationSec()
+                    : request.durationMin() * 60.0;
             caloriesBurned = ExerciseCalorieCalculator.estimate(
-                    request.exerciseName(), request.durationMin(), user.getWeight());
+                    request.exerciseName(), seconds, request.reps(), user.getWeight());
         }
 
         ExerciseLog log = ExerciseLog.builder()
@@ -50,9 +54,10 @@ public class ExerciseLogService {
         return ExerciseLogResponse.from(exerciseLogRepository.save(log));
     }
 
+    /** Python 자세 분석 서버의 결과를 뒤늦게 반영 (운동탭 '운동 분석 하러 가기') */
     @Transactional
     public ExerciseLogResponse updateAnalysisResult(Long userId, Long exerciseLogId,
-                                                     ExerciseAnalysisResultRequest request) {
+                                                    ExerciseAnalysisResultRequest request) {
         ExerciseLog log = exerciseLogRepository.findByIdAndUserId(exerciseLogId, userId)
                 .orElseThrow(() -> new EntityNotFoundException("운동 기록을 찾을 수 없습니다. id=" + exerciseLogId));
 
@@ -66,9 +71,10 @@ public class ExerciseLogService {
         return ExerciseLogResponse.from(log);
     }
 
+    /** 날짜별 운동 기록 목록 (기본: 오늘) */
     public List<ExerciseLogResponse> getLogsByDate(Long userId, LocalDate date) {
-        LocalDateTime start = LogicalDay.start(date);
-        LocalDateTime end = LogicalDay.end(date);
+        LocalDateTime start = date.atStartOfDay();
+        LocalDateTime end = date.atTime(LocalTime.MAX);
 
         return exerciseLogRepository
                 .findByUserIdAndExercisedAtBetweenOrderByExercisedAtDesc(userId, start, end)
@@ -77,9 +83,10 @@ public class ExerciseLogService {
                 .toList();
     }
 
+    /** 홈탭 '오늘의 활동 요약'용 집계 */
     public ExerciseDailySummaryResponse getDailySummary(Long userId, LocalDate date, int targetExerciseCalorie) {
-        LocalDateTime start = LogicalDay.start(date);
-        LocalDateTime end = LogicalDay.end(date);
+        LocalDateTime start = date.atStartOfDay();
+        LocalDateTime end = date.atTime(LocalTime.MAX);
 
         Integer totalCalories = exerciseLogRepository.sumCaloriesBurned(userId, start, end);
         Integer totalDuration = exerciseLogRepository.sumDurationMin(userId, start, end);

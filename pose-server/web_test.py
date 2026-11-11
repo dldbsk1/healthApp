@@ -17,8 +17,10 @@ import websockets
 SERVER_URL_TEMPLATE = "ws://localhost:8000/ws/exercise-live?exercise={exercise}"
 
 
-async def run(source, exercise):
+async def run(source, exercise, token=None):
     server_url = SERVER_URL_TEMPLATE.format(exercise=exercise)
+    if token:
+        server_url += f"&token={token}"
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         print(f"영상/웹캠을 열 수 없습니다: {source}")
@@ -93,7 +95,9 @@ if __name__ == "__main__":
     parser.add_argument("--exercise", type=str, required=True,
                          choices=["레그레이즈", "런지", "플랭크", "푸쉬업"],
                          help="테스트할 운동 이름 (예: 런지)")
+    parser.add_argument("--token", type=str, default=None,
+                         help="서버에 POSE_SERVER_TOKEN 이 설정된 경우 같은 값")
     args = parser.parse_args()
 
     source = args.video if args.video else 0
-    asyncio.run(run(source, args.exercise))
+    asyncio.run(run(source, args.exercise, args.token))

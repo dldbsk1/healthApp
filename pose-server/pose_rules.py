@@ -10,23 +10,6 @@ YOLO Pose 17개 관절 인덱스 (0-based):
   11: 왼엉덩이, 12: 오른엉덩이
   13: 왼무릎, 14: 오른무릎
   15: 왼발목, 16: 오른발목
-
-■ v2에서 달라진 점
-  1) 운동별 평가 항목 개편 (플랭크 / 푸쉬업 / 레그레이즈. 런지는 규칙 그대로)
-  2) "카메라에 더 가까운 한쪽"만 평가 (NearSideSelector, 프레임마다 좌우가 튀지 않게 고정)
-  3) 반복(rep)당 한 번 재는 항목 추가 — 푸쉬업 굽힘 깊이/펴짐, 레그레이즈 들어올린/내린 높이
-     (ZoneTracker가 한 반복 동안의 최저/최고 각도를 확정해서 평가)
-  4) 화면 비율 보정: 좌표를 w, h 각각으로 나눠 정규화하면 세로 영상에서 각도가 찌그러진다.
-     evaluate(..., aspect=w/h)로 x에 w/h를 곱해 실제 각도로 복원.
-
-■ 사용법 (실시간 서버)
-    evaluator = ExerciseEvaluator("푸쉬업")          # 세션당 1개 (상태를 가짐)
-    results, phase = evaluator.evaluate(norm, conf=conf, aspect=w / h, only_active=False)
-
-  results의 각 항목: {label, ok, desc, weight, [per_rep], [carry]}
-    - per_rep=True : 반복당 한 번 재는 항목
-    - carry=True   : 직전 반복의 결과를 화면 표시용으로 다시 실어 보낸 것.
-                     세션 통계(item_ok)에는 carry=False 인 것만 반영해야 중복 집계가 안 된다.
 """
 
 from collections import deque
@@ -47,7 +30,7 @@ PLANK_ARM_TOL = 20
 # 푸쉬업(무릎)
 PUSHUP_BACK_MIN = 160        # 어깨-엉덩이-무릎 (허리 정렬)
 PUSHUP_DEPTH_MAX = 100       # 내려갔을 때 팔꿈치 각도가 이 값 이하여야 통과
-PUSHUP_EXTEND_MIN = 160      # 올라왔을 때 팔꿈치 각도가 이 값 이상이어야 통과
+PUSHUP_EXTEND_MIN = 150      # 올라왔을 때 팔꿈치 각도가 이 값 이상이어야 통과
 PUSHUP_LOW_ENTER = 135       # 이 값 미만이면 "내려간 구간" (화면의 '운동 중/대기' 표시용)
 PUSHUP_HIGH_ENTER = 150      # 이 값 초과면 "올라온 구간" (사이는 직전 상태 유지)
 PUSHUP_MIN_AMP = 30          # 횟수 인정: 팔꿈치 각도가 이만큼 이상 내려갔다가
@@ -56,15 +39,14 @@ PUSHUP_RISE_FRAC = 0.6       #            그 변화량의 이 비율 이상 되
 # 레그레이즈
 LEGRAISE_KNEE_MIN = 160      # 엉덩이-무릎-발목 (무릎 펴짐)
 LEGRAISE_SPINE_MIN = 160     # 코-어깨-엉덩이
-LEGRAISE_TOP_MAX = 110       # 들어올렸을 때 몸통-다리 각도(어깨-엉덩이-발목)가 이 값 이하여야 통과
-LEGRAISE_BOTTOM_MIN = 150    # 내렸을 때 몸통-다리 각도가 이 값 이상이어야 통과
+LEGRAISE_TOP_MAX = 120       # 들어올렸을 때 몸통-다리 각도(어깨-엉덩이-발목)가 이 값 이하여야 통과
+LEGRAISE_BOTTOM_MIN = 140    # 내렸을 때 몸통-다리 각도가 이 값 이상이어야 통과
 LEGRAISE_LOW_ENTER = 130     # 이 값 미만이면 "들어올린 구간"
 LEGRAISE_HIGH_ENTER = 145    # 이 값 초과면 "내린 구간"
 
 # 실시간 안내 (레그레이즈·푸쉬업 공통, 점수에는 반영 안 함)
 HINT_DROP = 15               # 한 방향으로 이만큼 이상 움직여야 '의미 있는 동작'으로 봄 (대기 중 떨림 무시)
 HINT_TURN = 8                # 극값에서 이만큼 반대로 움직이면 '방향 전환'으로 판단
-HINT_FRAMES = 15             # 안내를 화면에 유지하는 프레임 수
 
 # 런지 반복 횟수 세기용 (뒷무릎 각도)
 LUNGE_REP_LOW = 120          # 이 값 미만이면 "내려간 구간" (_phase_lunge 의 down 기준과 동일)
@@ -179,6 +161,29 @@ class NearSideSelector:
 
 
 # ══════════════════════════════════════════════════════════
+# 시간 기준 평활화 (프레임 수가 아니라 초 단위 — 서버가 느려 프레임이 줄어도 같은 동작)
+# ══════════════════════════════════════════════════════════
+SMOOTH_SEC = 0.3             # 이 시간 안의 측정값 중앙값으로 노이즈를 줄임
+ZONE_CONFIRM_SEC = 0.1       # 구간 전환은 이 시간 이상(그리고 2프레임 이상) 유지돼야 인정
+FALLBACK_DT = 0.1            # t 를 안 넘겨주면 프레임마다 이만큼 흐른 것으로 본다 (약 10fps)
+_EPS = 1e-6
+
+
+class TimeMedian:
+    """최근 window 초 동안 들어온 값들의 중앙값."""
+
+    def __init__(self, window=SMOOTH_SEC):
+        self.window = window
+        self._buf = deque()
+
+    def update(self, value, t):
+        self._buf.append((t, float(value)))
+        while self._buf and t - self._buf[0][0] > self.window - _EPS:
+            self._buf.popleft()
+        return float(np.median([v for _, v in self._buf]))
+
+
+# ══════════════════════════════════════════════════════════
 # 반복(rep)당 극값 추적기
 # ══════════════════════════════════════════════════════════
 class ZoneTracker:
@@ -186,24 +191,24 @@ class ZoneTracker:
     구간이 끝나는 순간 그 구간의 극값(low=최소, high=최대)을 확정해서 돌려준다.
 
     - low_enter 미만이면 low, high_enter 초과면 high, 사이(데드밴드)는 직전 구간 유지
-    - 구간 전환은 confirm 프레임 연속으로 확인될 때만 인정 (한 프레임짜리 튐 무시)
-    - 최근 smooth 프레임의 중앙값으로 측정 노이즈를 줄임
+    - 구간 전환은 confirm 초 이상(2프레임 이상) 연속으로 확인될 때만 인정 (한 프레임짜리 튐 무시)
+    - 최근 smooth 초의 중앙값으로 측정 노이즈를 줄임
     update() → (현재 구간, finished) ; finished = ("low"|"high", 극값) 또는 None
     """
 
-    def __init__(self, low_enter, high_enter, confirm=2, smooth=3):
+    def __init__(self, low_enter, high_enter, confirm=ZONE_CONFIRM_SEC, smooth=SMOOTH_SEC):
         self.low_enter = low_enter
         self.high_enter = high_enter
         self.confirm = confirm
-        self._hist = deque(maxlen=smooth)
+        self._smooth = TimeMedian(smooth)
         self.zone = None
         self.extreme = None
         self._pending = None
         self._pending_n = 0
+        self._pending_t = None
 
-    def update(self, m):
-        self._hist.append(float(m))
-        s = float(np.median(self._hist))
+    def update(self, m, t):
+        s = self._smooth.update(m, t)
 
         cand = "low" if s < self.low_enter else ("high" if s > self.high_enter else None)
         finished = None
@@ -212,14 +217,14 @@ class ZoneTracker:
             if cand == self._pending:
                 self._pending_n += 1
             else:
-                self._pending, self._pending_n = cand, 1
-            if self._pending_n >= self.confirm:
+                self._pending, self._pending_n, self._pending_t = cand, 1, t
+            if self._pending_n >= 2 and t - self._pending_t >= self.confirm - _EPS:
                 if self.zone is not None and self.extreme is not None:
                     finished = (self.zone, self.extreme)
                 self.zone, self.extreme = cand, None
-                self._pending, self._pending_n = None, 0
+                self._pending, self._pending_n, self._pending_t = None, 0, None
         else:
-            self._pending, self._pending_n = None, 0
+            self._pending, self._pending_n, self._pending_t = None, 0, None
 
         if self.zone == "low":
             self.extreme = s if self.extreme is None else min(self.extreme, s)
@@ -404,20 +409,19 @@ class RepCounter:
 
     고점에서 min_amp 이상 내려갔다가, 그 하강량의 rise_frac 이상 되돌아오면 1회.
     update() → 반복이 완료된 프레임이면 (이번 반복의 고점, 저점), 아니면 None.
-    - turn 이내의 떨림은 방향 전환으로 보지 않는다 (최근 3프레임 중앙값으로 평활화)
+    - turn 이내의 떨림은 방향 전환으로 보지 않는다 (최근 0.3초 중앙값으로 평활화)
     - 하강량이 min_amp 미만인 얕은 흔들림은 반복으로 세지 않는다
     - 내려간 채로 시작하면 첫 상승은 세지 않고, 그다음 하강부터 센다
     """
 
     def __init__(self, min_amp, turn=HINT_TURN, rise_frac=0.6):
         self.min_amp, self.turn, self.rise_frac = min_amp, turn, rise_frac
-        self._hist = deque(maxlen=3)
+        self._smooth = TimeMedian()
         self._peak = None        # 최근 고점
         self._trough = None      # 내려가는 중이면 그 최저점, 아니면 None
 
-    def update(self, angle):
-        self._hist.append(float(angle))
-        s = float(np.median(self._hist))
+    def update(self, angle, t):
+        s = self._smooth.update(angle, t)
 
         if self._peak is None:
             self._peak = s
@@ -449,36 +453,41 @@ class RepCounter:
 
 
 class PeakHint:
-    """동작의 방향이 바뀌는 순간, 목표에 못 미쳤으면 바로 안내한다 (레그레이즈·푸쉬업 공통).
+    """동작의 방향이 바뀌는 순간, 목표에 못 미쳤으면 안내를 남긴다 (레그레이즈·푸쉬업 공통).
 
     정식 채점(ZoneTracker)은 구간이 끝난 뒤에 극값으로 한 번 하지만, 그러면 피드백이 한 박자 늦고
     low/high 구간에 아예 못 들어간 얕은 동작은 채점 자체가 안 된다. 이 클래스는 그 둘을 보완한다.
     안내는 점수/통계에 들어가지 않는다 (hint=True, carry=True, weight=0).
 
+    안내는 같은 종류의 동작을 다음에 다시 평가할 때까지 유지된다 (통과하면 사라지고, 또 미달이면 갱신).
+    앱이 '지금 하는 동작'의 줄만 보여주는 경우에도, 그 동작을 다시 시작할 때 지난번 결과가 보이게 하기 위함이다.
+
     cfg: low_max   각도가 줄다가 꺾일 때의 최소값이 이 값 이하여야 통과 (넘으면 low_* 안내)
          high_min  각도가 늘다가 꺾일 때의 최대값이 이 값 이상이어야 통과 (못 미치면 high_* 안내)
          low_label/low_desc, high_label/high_desc : 안내 항목 이름 / 문구 함수(값 -> str)
          low_formal/high_formal : 같은 주제의 정식 채점 항목 이름 (나오면 안내를 거둔다)
+         dec_move : 각도가 줄어드는 동작이 사용자에게 "up"(올리는 중)인지 "down"(내리는 중)인지
     """
 
     def __init__(self, cfg):
         self.cfg = cfg
-        self._hist = deque(maxlen=3)
+        self._smooth = TimeMedian()
         self._dir = None        # "dec"(각도 감소 중) / "inc"(각도 증가 중)
         self._origin = None     # 현재 방향이 시작된 값
         self._ext = None        # 현재 방향의 극값(감소 중=최소, 증가 중=최대)
-        self._item = None
-        self._left = 0
-        self._kind = None
+        self._items = {}        # "low" / "high" -> 안내 항목
 
-    def update(self, angle):
-        self._hist.append(float(angle))
-        s = float(np.median(self._hist))
+    @property
+    def move(self):
+        """지금 하는 동작: "up"(올리는/일어나는 중) / "down"(내리는/내려가는 중) / None(아직 모름)."""
+        if self._dir is None:
+            return None
+        dec = self.cfg["dec_move"]
+        inc = "down" if dec == "up" else "up"
+        return dec if self._dir == "dec" else inc
 
-        if self._left > 0:
-            self._left -= 1
-            if self._left == 0:
-                self._item = self._kind = None
+    def update(self, angle, t):
+        s = self._smooth.update(angle, t)
 
         if self._origin is None:
             self._origin = self._ext = s
@@ -497,33 +506,35 @@ class PeakHint:
                 self._ext = s
             elif s > self._ext + HINT_TURN:                   # 줄다가 늘기 시작 (= 최저점 통과)
                 low = self._ext
-                if self._origin - low >= HINT_DROP and low > c["low_max"]:
-                    self._show("low", c["low_label"], c["low_desc"](low))
+                if self._origin - low >= HINT_DROP:
+                    self._judge("low", low <= c["low_max"], c["low_label"], c["low_desc"](low))
                 self._dir, self._origin, self._ext = "inc", low, s
         else:
             if s > self._ext:
                 self._ext = s
             elif s < self._ext - HINT_TURN:                   # 늘다가 줄기 시작 (= 최고점 통과)
                 high = self._ext
-                if high - self._origin >= HINT_DROP and high < c["high_min"]:
-                    self._show("high", c["high_label"], c["high_desc"](high))
+                if high - self._origin >= HINT_DROP:
+                    self._judge("high", high >= c["high_min"], c["high_label"], c["high_desc"](high))
                 self._dir, self._origin, self._ext = "dec", high, s
 
-    def _show(self, kind, label, desc):
-        self._item = {"label": label, "desc": desc, "ok": False, "hint": True, "carry": True}
-        self._kind, self._left = kind, HINT_FRAMES
+    def _judge(self, kind, passed, label, desc):
+        if passed:
+            self._items.pop(kind, None)
+        else:
+            self._items[kind] = {"label": label, "desc": desc, "ok": False, "hint": True, "carry": True}
 
     def dismiss_formal(self, formal_label):
-        """정식 채점 결과가 나오면 같은 주제의 안내는 거둔다 (카드 중복 방지)."""
+        """같은 주제의 정식 채점 결과가 나오면 안내는 거둔다 (카드 중복 방지)."""
         c = self.cfg
-        kind = "low" if formal_label == c["low_formal"] else ("high" if formal_label == c["high_formal"] else None)
-        if kind and self._kind == kind:
-            self._item = self._kind = None
-            self._left = 0
+        if formal_label == c["low_formal"]:
+            self._items.pop("low", None)
+        elif formal_label == c["high_formal"]:
+            self._items.pop("high", None)
 
     @property
-    def item(self):
-        return dict(self._item) if self._item else None
+    def items(self):
+        return [dict(v) for v in self._items.values()]
 
 
 # ══════════════════════════════════════════════════════════
@@ -587,8 +598,8 @@ EXERCISE_RULES = {
 PHASE_LABEL = {"down": "운동 중", "up": "대기 자세", "none": "자세를 잡아주세요"}
 
 # ── '운동 자세를 잡았는가' 판정 (이게 없으면 사람이 화면에 보이기만 해도 채점이 시작됨) ──
-READY_ENTER_FRAMES = 5       # 자세 조건이 연속 5프레임 맞아야 '준비됨'
-READY_EXIT_FRAMES = 8        # 연속 8프레임 어긋나야 '준비 해제'
+READY_ENTER_SEC = 0.4        # 자세 조건이 이 시간 연속으로 맞아야 '준비됨'
+READY_EXIT_SEC = 0.7         # 이 시간 연속으로 어긋나야 '준비 해제'
 LYING_MIN_TILT = 50          # 플랭크/푸쉬업/레그레이즈: 몸통이 수직에서 이 각도 이상 기울어야(=누움/엎드림)
 LUNGE_MAX_TILT = 35          # 런지: 상체가 수직에서 이 각도 이내(=서 있음)
 
@@ -618,6 +629,7 @@ _PEAK_SPEC = {
                    low=PUSHUP_LOW_ENTER, high=PUSHUP_HIGH_ENTER, build=_pushup_peak,
                    hint=dict(
                        low_max=PUSHUP_DEPTH_MAX, high_min=PUSHUP_EXTEND_MIN,
+                       dec_move="down",          # 팔꿈치 각도가 줄어드는 중 = 내려가는 중
                        low_formal="팔꿈치 굽힘 깊이", high_formal="팔꿈치 펴짐 정도",
                        low_label="팔꿈치 굽힘 깊이 안내",
                        low_desc=lambda v: f"조금 더 깊게 내려가 보세요. (이번 최소: {v:.0f}°, 목표: {PUSHUP_DEPTH_MAX}° 이하)",
@@ -627,6 +639,7 @@ _PEAK_SPEC = {
                    low=LEGRAISE_LOW_ENTER, high=LEGRAISE_HIGH_ENTER, build=_legraise_peak,
                    hint=dict(
                        low_max=LEGRAISE_TOP_MAX, high_min=LEGRAISE_BOTTOM_MIN,
+                       dec_move="up",            # 몸통-다리 각도가 줄어드는 중 = 다리를 올리는 중
                        low_formal="다리 들어올린 높이", high_formal="다리 내린 높이",
                        low_label="다리 들어올린 높이 안내",
                        low_desc=lambda v: f"조금 더 높이 들어올려 보세요. (이번 최고점: {v:.0f}°, 목표: {LEGRAISE_TOP_MAX}° 이하)",
@@ -676,8 +689,9 @@ class ExerciseEvaluator:
         self._tracker = self._make_tracker()
         self._carry = {}   # label -> 직전 반복의 결과
         self.ready = False          # 운동 자세를 잡았는가
-        self._ok_run = 0
-        self._bad_run = 0
+        self._ok_since = None       # 자세 조건이 연속으로 맞기 시작한 시각
+        self._bad_since = None      # 연속으로 어긋나기 시작한 시각
+        self._clock = 0.0           # t 를 안 넘겨줄 때 쓰는 가상 시계
 
         # 실시간 반복 횟수 (플랭크는 반복이 없으므로 계속 0)
         self.rep_count = 0
@@ -685,6 +699,11 @@ class ExerciseEvaluator:
         self._seen_high = False     # '선/내린 구간'을 한 번이라도 거쳤는가 (내려간 채로 시작한 경우 첫 동작을 세지 않기 위함)
         self._hint = PeakHint(self._spec["hint"]) if self._spec else None
         self._amp = self._make_amp()
+
+    @property
+    def move(self):
+        """지금 하는 동작 "up"/"down" (레그레이즈·푸쉬업). 자세를 잡기 전이거나 아직 모르면 None."""
+        return self._hint.move if (self._hint and self.ready) else None
 
     def _make_amp(self):
         # 푸쉬업만 진폭 기반으로 횟수·반복당 채점 (구간 기준 135°/150°가 카메라 각도에 따라 안 맞는 문제 회피)
@@ -705,18 +724,20 @@ class ExerciseEvaluator:
         if zone == "high":
             self._seen_high = True
 
-    def _update_ready(self, in_pos):
+    def _update_ready(self, in_pos, t):
         if in_pos:
-            self._ok_run += 1
-            self._bad_run = 0
+            if self._ok_since is None:
+                self._ok_since = t
+            self._bad_since = None
         else:
-            self._bad_run += 1
-            self._ok_run = 0
+            if self._bad_since is None:
+                self._bad_since = t
+            self._ok_since = None
 
-        if not self.ready and self._ok_run >= READY_ENTER_FRAMES:
+        if not self.ready and self._ok_since is not None and t - self._ok_since >= READY_ENTER_SEC - _EPS:
             self.ready = True
             self._carry = {}                     # 새 세트: 이전 반복 결과 비움
-        elif self.ready and self._bad_run >= READY_EXIT_FRAMES:
+        elif self.ready and self._bad_since is not None and t - self._bad_since >= READY_EXIT_SEC - _EPS:
             self.ready = False
             self._tracker = self._make_tracker()  # 반복 추적도 처음부터 (누적 횟수는 유지)
             self._seen_high = False
@@ -724,9 +745,14 @@ class ExerciseEvaluator:
                 self._hint = PeakHint(self._spec["hint"])
             self._amp = self._make_amp()
 
-    def evaluate(self, kpts, conf=None, aspect=1.0, only_active=True):
+    def evaluate(self, kpts, conf=None, aspect=1.0, only_active=True, t=None):
         """kpts: (17,2) 0~1 정규화 좌표 (미검출=0,0). conf: (17,) YOLO 신뢰도(선택).
-        aspect: 프레임 w/h — x에 곱해 각도 왜곡을 보정. 반환: (results, phase)"""
+        aspect: 프레임 w/h — x에 곱해 각도 왜곡을 보정.
+        t: 프레임 시각(초, time() 등). 모든 평활화·확인 시간이 이 값 기준이다.
+           안 넘기면 호출마다 0.1초씩 흐른 것으로 본다. 반환: (results, phase)"""
+        if t is None:
+            self._clock += FALLBACK_DT
+            t = self._clock
         func = EXERCISE_RULES.get(self.exercise)
         if func is None:
             return [], "none"
@@ -735,12 +761,12 @@ class ExerciseEvaluator:
         k[:, 0] *= aspect
         self.rep_event = False
 
-        self._update_ready(_in_position(self.exercise, k))
+        self._update_ready(_in_position(self.exercise, k), t)
         if not self.ready:
             return [], "none"        # 자세를 잡기 전에는 채점·반복 추적 모두 안 함
 
         side = self.selector.update(k, conf)
-        phase, fresh = self._phase(k, side)
+        phase, fresh = self._phase(k, side, t)
 
         if phase == "none":
             return [], phase
@@ -765,17 +791,17 @@ class ExerciseEvaluator:
                 carried.append(c)
         fresh = [dict(r, carry=False) for r in fresh]
 
-        hint = self._hint.item if self._hint else None
-        results = cont + fresh + carried + ([hint] if hint else [])
+        hints = self._hint.items if self._hint else []
+        results = cont + fresh + carried + hints
         for r in results:
             r["weight"] = get_weight(self.exercise, r["label"])
         return results, phase
 
-    def _phase(self, k, side):
+    def _phase(self, k, side, t):
         if self.exercise == "런지":
             ang = _lunge_back_knee_angle(k)
             if ang is not None:
-                self._count_rep(*self._tracker.update(ang))
+                self._count_rep(*self._tracker.update(ang, t))
             return _phase_lunge(k), []
         if self.exercise == "플랭크":
             return _phase_plank(k), []
@@ -785,11 +811,11 @@ class ExerciseEvaluator:
         if s is None:
             return "none", []
         measured = spec["measure"](k, s)
-        zone, finished = self._tracker.update(measured)
+        zone, finished = self._tracker.update(measured, t)
         if self._hint:
-            self._hint.update(measured)
+            self._hint.update(measured, t)
         if self._amp is not None:
-            done = self._amp.update(measured)
+            done = self._amp.update(measured, t)
             fresh = []
             if done:
                 top, bottom = done
@@ -804,8 +830,7 @@ class ExerciseEvaluator:
 
 
 # ══════════════════════════════════════════════════════════
-# 하위 호환용 (상태 없는 단발 호출)
-#   반복당 항목은 이력이 필요해서 나오지 않는다. 실시간/영상 분석은 ExerciseEvaluator를 쓸 것.
+# 하위 호환용
 # ══════════════════════════════════════════════════════════
 def get_phase(exercise_name: str, kpts: np.ndarray) -> str:
     return ExerciseEvaluator(exercise_name).evaluate(kpts, only_active=True)[1]

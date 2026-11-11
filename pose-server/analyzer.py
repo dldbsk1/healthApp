@@ -263,6 +263,7 @@ def analyze_video(source, progress_cb=None, skeleton_out=None, debug=False, det_
     if not cap.isOpened():
         raise IOError(f"영상을 열 수 없습니다: {source}")
 
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0   # 자세 평가의 시간 기준(프레임 시각)용
     sampled = []
     fidx = 0
 
@@ -437,13 +438,13 @@ def analyze_video(source, progress_cb=None, skeleton_out=None, debug=False, det_
     aspect = (sampled[0][1] / sampled[0][2]) if sampled else 1.0   # 각도 왜곡 보정용 w/h
     good_frames = 0   # 플랭크: 핵심 항목이 모두 통과한 프레임 수
 
-    for norm in norm_frames:
+    for i, norm in enumerate(norm_frames):
         if norm is None:
             phase_seq.append("none")
             phase_count["none"] += 1
             continue
 
-        results, phase = evaluator.evaluate(norm, aspect=aspect)
+        results, phase = evaluator.evaluate(norm, aspect=aspect, t=i * FRAME_STRIDE / src_fps)
 
         phase_count[phase] = phase_count.get(phase, 0) + 1
         phase_seq.append(phase)
