@@ -578,8 +578,9 @@ struct ExerciseLiveView: View {
             FixedRow(title: "상체 펴기",     keys: ["상체"]),
         ],
         "레그레이즈": [
-            FixedRow(title: "더 내려가세요", keys: ["내린 높이"],     move: "down"),
-            FixedRow(title: "더 올라가세요", keys: ["들어올린 높이"], move: "up")
+            FixedRow(title: "다리 더 내리기", keys: ["내린 높이"],     move: "down"),
+            FixedRow(title: "다리 더 올리기", keys: ["들어올린 높이"], move: "up"),
+            FixedRow(title: "무릎 펴기", keys: ["무릎"])
         ],
         "플랭크": [
             FixedRow(title: "엉덩이 일직선", keys: ["엉덩이"]),
