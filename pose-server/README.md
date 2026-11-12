@@ -53,9 +53,6 @@ pip install -r requirements.txt
 pip install onnxruntime pandas   # analyzer.py / lstm.py 가 import 함
 ```
 
-GPU를 쓰려면 PyTorch를 CUDA 빌드로 설치해야 합니다 ([pytorch.org](https://pytorch.org/get-started/locally/) 참고).
-서버 시작 로그에 `YOLO 추론 디바이스: 0` 이 찍히면 GPU, `cpu` 면 CPU입니다.
-
 ### 모델 가중치
 
 `weights/` 는 용량 때문에 저장소에 포함하지 않습니다. 아래 파일을 `weights/` 폴더에 넣어주세요.
@@ -105,8 +102,9 @@ ws://<host>:8000/ws/exercise-live?exercise=<운동명>[&session_id=<id>][&token=
 | 카메라 프레임 | **binary** (JPEG) | 긴 변 720px 안팎, 품질 0.6 정도 권장. 최대 2MB |
 | 운동 종료 | **text** `"finish"` | 세션 요약을 받고 연결이 종료됨 |
 
-**프레임 하나를 보내면 응답이 정확히 하나 옵니다.** 응답을 받은 뒤 다음 프레임을 보내는 방식(lockstep)을 전제로 합니다.
-초당 5~10프레임 정도면 횟수 판정에 충분합니다. 판정은 프레임 수가 아니라 **서버 수신 시각** 기준이라 전송 속도가 달라도 결과가 같습니다.
+**프레임 하나 당 응답 한 개** 응답을 받은 뒤 다음 프레임을 보내는 방식(lockstep)
+초당 5~10프레임 정도면 횟수 판정에 충분합니다. 
+판정은 프레임 수가 아니라 **서버 수신 시각** 기준이라 전송 속도가 달라도 결과가 같습니다.
 
 ### 서버 → 클라이언트
 
@@ -196,7 +194,7 @@ ws://<host>:8000/ws/exercise-live?exercise=<운동명>[&session_id=<id>][&token=
 
 ### 재접속 (세션 이어하기)
 
-연결이 `"finish"` 없이 끊기면 서버는 세션을 **5분간 보관**합니다.
+연결이 `"finish"` 없이 끊기면 서버는 세션을 **5분간 보관**
 그 안에 같은 `exercise` 와 `session_id` 로 다시 연결하면 횟수·점수·시간이 그대로 이어집니다.
 
 1. 첫 응답의 `session_id` 를 저장 (또는 앱이 UUID를 만들어 처음부터 `&session_id=` 로 전달)
@@ -261,12 +259,3 @@ python web_test.py --video pushup.mp4 --exercise 푸쉬업
 python web_test.py --webcam --exercise 플랭크
 python web_test.py --video sample.mp4 --exercise 레그레이즈 --token <토큰>   # 토큰을 설정한 경우
 ```
-
----
-
-## 6. 배포 참고
-
-- **GPU 1개 기준 설계**입니다. YOLO 추론은 전용 스레드 1개에서 순서대로 실행되므로 동시 접속이 늘면 지연이 늘어납니다. `POSE_MAX_SESSIONS` 로 상한을 조절하세요.
-- 세션은 **서버 메모리**에 보관됩니다. 여러 인스턴스로 늘릴 때는 재접속이 같은 인스턴스로 가도록 로드밸런서에 sticky session 이 필요합니다.
-- 외부에 노출할 때는 `POSE_SERVER_TOKEN` 을 설정하고, 가능하면 리버스 프록시에서 TLS(`wss://`)를 적용하세요.
-- Spring Boot 백엔드와는 완전히 분리된 서버입니다. 같은 머신에서 포트만 다르게 띄워도 되고 따로 배포해도 됩니다.
